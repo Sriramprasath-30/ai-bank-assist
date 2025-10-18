@@ -1,14 +1,6 @@
 import streamlit as st
-import joblib
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
+from datetime import datetime
 import random
-import openai  # New: OpenAI SDK
-import os
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -18,13 +10,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Custom CSS ---
-st.markdown("""
-<style>
-/* Your existing CSS here (same as before) */
-</style>
-""", unsafe_allow_html=True)
-
 # --- App Title ---
 st.markdown('<h1 class="main-header">🏦 SecureBank AI Assistant</h1>', unsafe_allow_html=True)
 st.markdown("### Your 24/7 Banking Support with Advanced Fraud Protection")
@@ -33,50 +18,17 @@ st.markdown("### Your 24/7 Banking Support with Advanced Fraud Protection")
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "transaction_history" not in st.session_state:
-    st.session_state.transaction_history = []
-
-if "alerts" not in st.session_state:
-    st.session_state.alerts = []
-
-# --- Initialize OpenAI ---
-# Store your OpenAI API key in Streamlit Secrets
-openai.api_key = st.secrets["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"]  # OR use os.environ.get("OPENAI_API_KEY")
-
-def ask_openai(prompt, model="gpt-3.5-turbo", max_tokens=200):
-    """Call OpenAI API to get a response"""
-    try:
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a helpful banking assistant named Vizhibot."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=max_tokens,
-            temperature=0.7
-        )
-        answer = response.choices[0].message.content.strip()
-        return answer
-    except Exception as e:
-        return f"Error connecting to OpenAI: {e}"
-
-# --- Vizhibot Component (same as before) ---
+# --- Vizhibot Component ---
 class Vizhibot:
     def __init__(self):
         self.state = "idle"
         self.last_animation = datetime.now()
     
     def display(self, state="idle", message=None):
-        # Placeholder for animation/state logic
-        pass
-    
-    def random_idle_animation(self):
-        # Placeholder for random idle animations
-        pass
+        pass  # Placeholder for animation/state logic
     
     def chat_response(self, message):
-        """Now uses OpenAI"""
-        # Predefined responses
+        """Local responses only"""
         predefined_responses = {
             "balance": ("💰", "Looking up your account balance..."),
             "loan": ("🤔", "Checking loan options for you..."),
@@ -92,20 +44,22 @@ class Vizhibot:
             if key in message.lower():
                 return (emoji, response)
         
-        # Otherwise, ask OpenAI
-        answer = ask_openai(message)
-        return ("🤖", answer)
+        # Random fallback response
+        fallback_responses = [
+            "Can you please rephrase that?",
+            "I am here to assist you with banking queries.",
+            "Sorry, I didn't understand that. Ask about balance, loans, or transactions!"
+        ]
+        return ("🤖", random.choice(fallback_responses))
 
 # Initialize Vizhibot
 if "vizhibot" not in st.session_state:
     st.session_state.vizhibot = Vizhibot()
 
-# --- The rest of your app remains mostly unchanged ---
-# Sidebar, SpendingProfile, Fraud Detection, Payments, Dashboard
-
-# --- Example Chat Support with OpenAI ---
+# --- Sidebar Module Selection ---
 app_mode = st.sidebar.radio("Choose a module:", ["💬 Chat Support", "🔍 Fraud Detection", "💳 Make Payment", "📊 Account Dashboard"])
 
+# --- Chat Support Module ---
 if app_mode == "💬 Chat Support":
     st.header("💬 AI Customer Support")
     
@@ -132,18 +86,16 @@ if app_mode == "💬 Chat Support":
 if app_mode == "🔍 Fraud Detection":
     st.header("🔍 Fraud Detection")
     st.markdown("This module analyzes transactions to detect potential frauds.")
-    # ... your fraud detection code here ...
+    st.info("Demo mode: No real fraud detection implemented.")
 
 # --- Make Payment Module ---
 if app_mode == "💳 Make Payment":
     st.header("💳 Make Payment")
     st.markdown("Process payments securely through SecureBank AI Assistant.")
-    # ... your payment processing code here ...
+    st.info("Demo mode: No real payments implemented.")
 
 # --- Account Dashboard Module ---
 if app_mode == "📊 Account Dashboard":
     st.header("📊 Account Dashboard")
     st.markdown("Visualize your account activity, balance, and alerts.")
-    # ... your dashboard code here ...
-
-# --- End of App ---
+    st.info("Demo mode: No real account data available.")
