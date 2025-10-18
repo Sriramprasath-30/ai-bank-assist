@@ -9,3 +9,4 @@ protobuf
 joblib
 matplotlib
 python-dotenv
+groq
