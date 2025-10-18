@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use('Agg')
 import random
 import os
-from openai import OpenAI
+from groq import Groq
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -109,21 +109,28 @@ if "transaction_history" not in st.session_state:
 if "alerts" not in st.session_state:
     st.session_state.alerts = []
 
-# --- Initialize OpenAI ---
+# --- Initialize Groq Client ---
 @st.cache_resource
-def initialize_openai():
-    """Initialize OpenAI client with API key"""
-    api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+def initialize_groq():
+    """Initialize Groq client with API key"""
+    api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY")
     if not api_key:
+        st.warning("⚠️ GROQ_API_KEY not found. Please add it to your Streamlit secrets.")
         return None
     try:
-        client = OpenAI(api_key=api_key)
+        client = Groq(api_key=api_key)
+        # Test the connection
+        test_response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=5
+        )
         return client
     except Exception as e:
-        st.error(f"Failed to initialize OpenAI: {str(e)}")
+        st.error(f"Failed to initialize Groq: {str(e)}")
         return None
 
-openai_client = initialize_openai()
+groq_client = initialize_groq()
 
 # --- Vizhibot Component ---
 class Vizhibot:
@@ -212,7 +219,7 @@ class SpendingProfile:
         self.transaction_history = []
         self.weekly_spending = 0
         self.typical_spending = {
-            'morning': {'amount': 1500, 'count': 0},  # In rupees
+            'morning': {'amount': 1500, 'count': 0},
             'afternoon': {'amount': 2500, 'count': 0},
             'evening': {'amount': 3500, 'count': 0},
             'night': {'amount': 2000, 'count': 0}
@@ -231,20 +238,17 @@ class SpendingProfile:
         }
         self.transaction_history.append(transaction)
         
-        # Update time patterns
         time_period = self._get_time_period(hour)
         self.typical_spending[time_period]['amount'] = (
             self.typical_spending[time_period]['amount'] + amount
         ) / 2
         self.typical_spending[time_period]['count'] += 1
         
-        # Update category patterns
         if category not in self.category_patterns:
             self.category_patterns[category] = {'total': 0, 'count': 0}
         self.category_patterns[category]['total'] += amount
         self.category_patterns[category]['count'] += 1
         
-        # Update weekly spending (last 7 days only)
         one_week_ago = datetime.now() - timedelta(days=7)
         self.weekly_spending = sum(t['amount'] for t in self.transaction_history 
                                  if t['timestamp'] > one_week_ago)
@@ -260,7 +264,6 @@ class SpendingProfile:
         risks = []
         risk_factors = []
         
-        # 1. Time pattern risk
         time_period = self._get_time_period(hour)
         typical_amount = self.typical_spending[time_period]['amount']
         if typical_amount > 0:
@@ -280,7 +283,6 @@ class SpendingProfile:
                     risk_score
                 ))
         
-        # 2. Category risk
         if category in self.category_patterns:
             avg_category = self.category_patterns[category]['total'] / self.category_patterns[category]['count']
             if amount > avg_category * 4:
@@ -301,8 +303,7 @@ class SpendingProfile:
             risks.append(0.3)
             risk_factors.append(("New spending category", 0.3))
         
-        # 3. Weekly budget risk
-        if self.weekly_spending + amount > 50000:  # Weekly limit in rupees
+        if self.weekly_spending + amount > 50000:
             overspend_ratio = (self.weekly_spending + amount) / 50000
             risk_score = min(0.5 + (overspend_ratio - 1) * 0.5, 0.9)
             risks.append(risk_score)
@@ -311,11 +312,9 @@ class SpendingProfile:
                 risk_score
             ))
         
-        # Calculate overall risk score
         if not risks:
             return 0.1, ["Normal spending pattern"], []
         
-        # Use maximum risk with weighted average
         max_risk = max(risks) if risks else 0
         avg_risk = sum(risks) / len(risks) if risks else 0
         total_risk = max_risk * 0.7 + avg_risk * 0.3
@@ -325,7 +324,6 @@ class SpendingProfile:
 # Initialize user spending profile
 if "spending_profile" not in st.session_state:
     st.session_state.spending_profile = SpendingProfile()
-    # Pre-train with some typical spending
     typical_transactions = [
         (2500, "Restaurant", 19),
         (5000, "Online Shopping", 20),
@@ -352,17 +350,17 @@ with st.sidebar:
     if hasattr(st.session_state, 'spending_profile'):
         st.metric("Weekly Spending", f"₹{st.session_state.spending_profile.weekly_spending:,.0f}")
     
-    # Show OpenAI status
-    if openai_client:
-        st.success("🤖 AI Enhanced Mode")
+    if groq_client:
+        st.success("🤖 Groq AI Enhanced Mode")
+        st.caption("Powered by Llama 3.1")
     else:
-        st.info("🔧 Standard Mode")
+        st.warning("🔧 Standard Mode")
+        st.caption("Add GROQ_API_KEY to enable AI")
     
-    # Alert notifications
     if st.session_state.alerts:
         st.divider()
         st.header("🔔 Alerts")
-        for i, alert in enumerate(st.session_state.alerts[-3:]):  # Show last 3 alerts
+        for i, alert in enumerate(st.session_state.alerts[-3:]):
             st.warning(f"{alert['type']}: {alert['message']}")
             if st.button(f"Dismiss", key=f"dismiss_{i}"):
                 st.session_state.alerts.pop(i)
@@ -371,13 +369,11 @@ with st.sidebar:
 # --- Load AI Models ---
 @st.cache_resource
 def load_models():
-    # Load QA Model
     try:
         qa_model = pipeline("question-answering")
     except:
         qa_model = None
     
-    # Load Fraud Model
     try:
         fraud_model = joblib.load('fraud_model.pkl')
     except:
@@ -399,14 +395,10 @@ If you suspect fraudulent activity, immediately call our security team at 1-800-
 Fixed term deposits require a minimum of ₹25,000 for 12-month terms earning 4.5% APY.
 We have over 200 branches across major Indian cities."""
 
-# --- OpenAI Integration Functions ---
-def get_openai_response(user_query, conversation_history=None):
-    """
-    Get intelligent response from OpenAI GPT with banking context
-    Falls back to original QA model if OpenAI unavailable
-    """
-    if not openai_client:
-        # Fallback to original transformers model
+# --- Groq Integration Functions ---
+def get_groq_response(user_query, conversation_history=None):
+    """Get intelligent response from Groq with banking context"""
+    if not groq_client:
         if qa_model:
             try:
                 result = qa_model(question=user_query, context=banking_context)
@@ -416,7 +408,6 @@ def get_openai_response(user_query, conversation_history=None):
         return "AI service temporarily unavailable. Please contact support."
     
     try:
-        # Build conversation context
         messages = [
             {
                 "role": "system",
@@ -453,46 +444,43 @@ Response guidelines:
             }
         ]
         
-        # Add conversation history if provided
         if conversation_history:
-            for speaker, message in conversation_history[-6:]:  # Last 3 exchanges
+            for speaker, message in conversation_history[-6:]:
                 role = "user" if speaker == "user" else "assistant"
                 messages.append({"role": role, "content": message})
         
-        # Add current query
         messages.append({"role": "user", "content": user_query})
         
-        # Call OpenAI API
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",  # Use gpt-4-turbo-preview for better responses
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
             messages=messages,
             temperature=0.7,
             max_tokens=300,
             top_p=0.9,
-            frequency_penalty=0.5,
-            presence_penalty=0.3
         )
         
         return response.choices[0].message.content.strip()
         
     except Exception as e:
-        # Fallback to original model
         if qa_model:
             try:
                 result = qa_model(question=user_query, context=banking_context)
                 return result['answer'] if result['score'] > 0.2 else "I'm having trouble right now. Please try again."
             except:
                 pass
-        return "I'm experiencing technical difficulties. Please contact our support team."
+        return f"I'm experiencing technical difficulties. Please try again or contact support."
 
 def get_fraud_explanation(transaction_data, risk_score, risk_factors):
-    """
-    Get natural language explanation of fraud analysis using OpenAI
-    """
-    if not openai_client:
+    """Get natural language explanation of fraud analysis using Groq"""
+    if not groq_client:
         return None
     
     try:
+        factors_text = "\n".join([
+            f"- {factor}: {score:.0%} - {explanation}" 
+            for factor, score, explanation in risk_factors
+        ])
+        
         prompt = f"""As a fraud detection expert, explain this transaction analysis to a customer:
 
 Transaction Details:
@@ -502,7 +490,7 @@ Transaction Details:
 - Risk Score: {risk_score:.0%}
 
 Risk Factors Detected:
-{chr(10).join([f"- {factor}: {score:.0%} ({explanation})" for factor, score, explanation in risk_factors])}
+{factors_text}
 
 Provide:
 1. Clear summary of the risk level (2-3 sentences)
@@ -511,14 +499,14 @@ Provide:
 
 Keep it under 100 words, customer-friendly, and actionable."""
 
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a fraud prevention expert explaining risks clearly to customers."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.5,
-            max_tokens=200
+            max_tokens=250
         )
         
         return response.choices[0].message.content.strip()
@@ -527,19 +515,21 @@ Keep it under 100 words, customer-friendly, and actionable."""
         return None
 
 def get_spending_insights(spending_profile):
-    """
-    Generate personalized spending insights using OpenAI
-    """
-    if not openai_client or not spending_profile.transaction_history:
+    """Generate personalized spending insights using Groq"""
+    if not groq_client or not spending_profile.transaction_history:
         return None
     
     try:
-        # Prepare spending data
         total_spent = sum(t['amount'] for t in spending_profile.transaction_history[-30:])
         categories = {}
         for t in spending_profile.transaction_history[-30:]:
             cat = t.get('category', 'Other')
             categories[cat] = categories.get(cat, 0) + t['amount']
+        
+        categories_text = "\n".join([
+            f"- {cat}: ₹{amt:,.2f}" 
+            for cat, amt in sorted(categories.items(), key=lambda x: x[1], reverse=True)
+        ])
         
         prompt = f"""Analyze this customer's spending and provide 3 personalized insights:
 
@@ -549,7 +539,7 @@ def get_spending_insights(spending_profile):
 - Transactions: {len(spending_profile.transaction_history[-30:])}
 
 Category Breakdown:
-{chr(10).join([f"- {cat}: ₹{amt:,.2f}" for cat, amt in sorted(categories.items(), key=lambda x: x[1], reverse=True)])}
+{categories_text}
 
 Provide:
 1. One positive observation
@@ -558,22 +548,21 @@ Provide:
 
 Keep each insight to 1 sentence. Be encouraging and practical."""
 
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a friendly financial advisor providing helpful spending insights."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=200
+            max_tokens=250
         )
         
         return response.choices[0].message.content.strip()
         
     except Exception as e:
         return None
-
-# --- Vizhibot Introduction and Capabilities ---
+# --- Vizhibot Introduction ---
 def get_vizhibot_introduction():
     """Return Vizhibot's introduction and capabilities"""
     return """
@@ -600,7 +589,6 @@ def analyze_transaction(amount, hour, merchant):
     risk_factors = []
     total_risk = 0
     
-    # 1. Check against known fraudulent merchants
     if merchant in FRAUDULENT_MERCHANTS:
         merchant_risk = FRAUDULENT_MERCHANTS[merchant]["risk_score"]
         risk_factors.append((
@@ -610,7 +598,6 @@ def analyze_transaction(amount, hour, merchant):
         ))
         total_risk = max(total_risk, merchant_risk)
     
-    # 2. ML model prediction
     if fraud_model is not None:
         try:
             amount_to_hour_ratio = amount / (hour + 1)
@@ -629,8 +616,7 @@ def analyze_transaction(amount, hour, merchant):
         except Exception as e:
             risk_factors.append(("Model Error", 0.2, f"Prediction error: {str(e)}"))
     
-    # 3. Rule-based checks
-    if amount > 15000:  # High amount threshold in rupees
+    if amount > 15000:
         amount_risk = min(0.3 + (amount - 15000) / 50000, 0.8)
         risk_factors.append((
             f"High amount (₹{amount:,.0f})", 
@@ -648,9 +634,7 @@ def analyze_transaction(amount, hour, merchant):
         ))
         total_risk = max(total_risk, time_risk)
     
-    # Calculate combined risk (weighted towards highest risk factor)
     if risk_factors:
-        # Use maximum risk with contribution from other factors
         sorted_factors = sorted(risk_factors, key=lambda x: x[1], reverse=True)
         total_risk = sorted_factors[0][1] * 0.7
         if len(sorted_factors) > 1:
@@ -660,27 +644,21 @@ def analyze_transaction(amount, hour, merchant):
     
     return total_risk, risk_factors
 
-# --- Unique Feature 2: Predictive Risk Engine ---
+# --- Predictive Risk Engine ---
 def predict_payment_risk(amount, category, hour, merchant):
     """Predict risk before payment is processed"""
-    # Get behavioral risk from spending profile
     behavior_risk, behavior_factors = st.session_state.spending_profile.calculate_behavior_risk(amount, category, hour)
     
-    # Get fraud model risk
     fraud_risk, fraud_factors = analyze_transaction(amount, hour, merchant)
     
-    # Combine all risk factors
     all_factors = []
     
-    # Add behavioral factors
     for factor, score in behavior_factors:
         all_factors.append((f"Behavior: {factor}", score * 0.7, "Based on your spending patterns"))
     
-    # Add fraud factors
     for factor, score, explanation in fraud_factors:
         all_factors.append((factor, score, explanation))
     
-    # Calculate combined risk (weighted average)
     if all_factors:
         total_risk = sum(score for _, score, _ in all_factors) / len(all_factors)
     else:
@@ -694,7 +672,6 @@ def detect_spending_anomalies():
     if not hasattr(st.session_state, 'spending_profile') or not st.session_state.spending_profile.transaction_history:
         return [], []
     
-    # Get recent transactions (last 30 days)
     thirty_days_ago = datetime.now() - timedelta(days=30)
     recent_transactions = [
         t for t in st.session_state.spending_profile.transaction_history 
@@ -702,13 +679,12 @@ def detect_spending_anomalies():
     ]
     
     if len(recent_transactions) < 5:
-        return [], []  # Not enough data
+        return [], []
     
     amounts = [t['amount'] for t in recent_transactions]
     mean = np.mean(amounts)
     std = np.std(amounts)
     
-    # Find anomalies (more than 2 standard deviations from mean)
     anomalies = []
     for i, transaction in enumerate(recent_transactions):
         z_score = abs(transaction['amount'] - mean) / std if std > 0 else 0
@@ -733,5 +709,554 @@ def add_alert(alert_type, message):
     }
     st.session_state.alerts.append(alert)
     
-    # Simulate email/SMS (in a real app, this would call an API)
     if alert_type == "Fraud Alert":
+        pass
+
+# --- MODULE 1: Chat Support ---
+if app_mode == "💬 Chat Support":
+    st.session_state.vizhibot.display("idle", "Ready to assist you!")
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.subheader("💬 Chat with Vizhibot")
+        
+        chat_container = st.container()
+        with chat_container:
+            if not st.session_state.chat_history:
+                st.info(get_vizhibot_introduction())
+            else:
+                for speaker, message in st.session_state.chat_history:
+                    if speaker == "user":
+                        st.markdown(f"**You:** {message}")
+                    else:
+                        st.markdown(f"**Vizhibot:** {message}")
+        
+        user_input = st.text_input("Ask me anything about banking:", key="chat_input", placeholder="e.g., What are your loan rates?")
+        
+        col_send, col_clear = st.columns([1, 1])
+        
+        with col_send:
+            if st.button("Send", type="primary", use_container_width=True):
+                if user_input:
+                    st.session_state.chat_history.append(("user", user_input))
+                    st.session_state.vizhibot.display("thinking", "Processing your question...")
+                    response = get_groq_response(user_input, st.session_state.chat_history)
+                    st.session_state.chat_history.append(("assistant", response))
+                    st.rerun()
+        
+        with col_clear:
+            if st.button("Clear Chat", use_container_width=True):
+                st.session_state.chat_history = []
+                st.rerun()
+    
+    with col2:
+        st.subheader("Quick Actions")
+        if st.button("💰 Check Balance", use_container_width=True):
+            st.session_state.chat_history.append(("user", "What's my account balance?"))
+            response = "Your current account balance is ₹82,450. You have ₹3,45,320 in total assets across all accounts."
+            st.session_state.chat_history.append(("assistant", response))
+            st.rerun()
+        
+        if st.button("🏠 Loan Options", use_container_width=True):
+            st.session_state.chat_history.append(("user", "What loan options are available?"))
+            response = get_groq_response("What loan options are available?", st.session_state.chat_history)
+            st.session_state.chat_history.append(("assistant", response))
+            st.rerun()
+        
+        if st.button("🛡️ Security Tips", use_container_width=True):
+            st.session_state.chat_history.append(("user", "Give me security tips"))
+            response = get_groq_response("Give me important security tips for online banking", st.session_state.chat_history)
+            st.session_state.chat_history.append(("assistant", response))
+            st.rerun()
+        
+        if st.button("📞 Contact Support", use_container_width=True):
+            st.info("📞 Call: 1-800-732-8732\n📧 Email: support@securebank.com\n⏰ Available 24/7")
+
+# --- MODULE 2: Fraud Detection ---
+elif app_mode == "🔍 Fraud Detection":
+    st.session_state.vizhibot.display("security", "Running security analysis...")
+    
+    st.subheader("🔍 Real-Time Fraud Detection System")
+    
+    tab1, tab2, tab3 = st.tabs(["🔎 Analyze Transaction", "📊 Spending Anomalies", "🛡️ Security Dashboard"])
+    
+    with tab1:
+        st.markdown("### Analyze a Transaction for Fraud Risk")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            amount = st.number_input("Transaction Amount (₹)", min_value=0.0, value=5000.0, step=100.0)
+            merchant = st.text_input("Merchant Name", value="Amazon India")
+            category = st.selectbox("Category", ["Online Shopping", "Restaurant", "Groceries", "Electronics", 
+                                                 "Entertainment", "Transport", "Healthcare", "Other"])
+        
+        with col2:
+            hour = st.slider("Transaction Hour", 0, 23, 14)
+            st.info(f"🕐 Selected time: {hour}:00 ({('Morning' if 5<=hour<12 else 'Afternoon' if 12<=hour<17 else 'Evening' if 17<=hour<22 else 'Night')})")
+        
+        if st.button("🔍 Analyze Transaction", type="primary", use_container_width=True):
+            st.session_state.vizhibot.display("analyzing", "Scanning for fraud patterns...")
+            
+            with st.spinner("Analyzing transaction..."):
+                time.sleep(1)
+                
+                risk_score, risk_factors = predict_payment_risk(amount, category, hour, merchant)
+                
+                st.markdown("---")
+                st.markdown("### 📊 Analysis Results")
+                
+                col_risk, col_status = st.columns([1, 2])
+                
+                with col_risk:
+                    st.metric("Risk Score", f"{risk_score:.0%}")
+                    
+                    if risk_score < 0.3:
+                        st.success("✅ Low Risk")
+                        st.session_state.vizhibot.display("success", "Transaction looks safe!")
+                    elif risk_score < 0.6:
+                        st.warning("⚠️ Medium Risk")
+                        st.session_state.vizhibot.display("warning", "Some concerns detected")
+                    else:
+                        st.error("🚨 High Risk")
+                        st.session_state.vizhibot.display("error", "Potential fraud detected!")
+                
+                with col_status:
+                    if risk_score < 0.3:
+                        st.success("**Transaction Approved** ✅")
+                        st.info("This transaction matches your typical spending patterns.")
+                    elif risk_score < 0.6:
+                        st.warning("**Review Required** ⚠️")
+                        st.info("Please verify this transaction before proceeding.")
+                    else:
+                        st.error("**Transaction Blocked** 🚫")
+                        st.error("Contact security: 1-800-732-8732")
+                        add_alert("Fraud Alert", f"High-risk transaction blocked: ₹{amount:,.0f} at {merchant}")
+                
+                if risk_factors:
+                    st.markdown("### 🔬 Risk Factor Breakdown")
+                    
+                    for factor, score, explanation in risk_factors:
+                        col_factor, col_score = st.columns([3, 1])
+                        with col_factor:
+                            st.markdown(f"**{factor}**")
+                            st.caption(explanation)
+                        with col_score:
+                            risk_class = "risk-high" if score > 0.6 else "risk-medium" if score > 0.3 else "risk-low"
+                            st.markdown(f'<p class="{risk_class}">{score:.0%}</p>', unsafe_allow_html=True)
+                
+                if groq_client:
+                    st.markdown("### 🤖 AI Expert Analysis")
+                    transaction_data = {
+                        'amount': amount,
+                        'hour': hour,
+                        'merchant': merchant,
+                        'category': category
+                    }
+                    
+                    with st.spinner("Generating expert analysis..."):
+                        ai_explanation = get_fraud_explanation(transaction_data, risk_score, risk_factors)
+                        if ai_explanation:
+                            st.info(ai_explanation)
+                        else:
+                            st.warning("AI analysis temporarily unavailable")
+    
+    with tab2:
+        st.markdown("### 📊 Spending Pattern Anomaly Detection")
+        
+        if st.button("🔍 Detect Anomalies", type="primary"):
+            recent_transactions, anomalies = detect_spending_anomalies()
+            
+            if not recent_transactions:
+                st.info("Not enough transaction data. Make some payments to enable anomaly detection.")
+            else:
+                st.success(f"✅ Analyzed {len(recent_transactions)} transactions from the last 30 days")
+                
+                if anomalies:
+                    st.warning(f"⚠️ Found {len(anomalies)} unusual transactions")
+                    
+                    for anomaly in anomalies:
+                        t = anomaly['transaction']
+                        with st.expander(f"🚨 Unusual: ₹{t['amount']:,.0f} - {t.get('category', 'N/A')} ({anomaly['deviation']})"):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Amount:** ₹{t['amount']:,.0f}")
+                                st.write(f"**Category:** {t.get('category', 'N/A')}")
+                                st.write(f"**Time:** {t['hour']}:00")
+                            with col2:
+                                st.write(f"**Date:** {t['timestamp'].strftime('%Y-%m-%d')}")
+                                st.write(f"**Z-Score:** {anomaly['z_score']:.2f}")
+                                st.metric("Deviation", anomaly['deviation'])
+                else:
+                    st.success("✅ No anomalies detected. All transactions look normal!")
+                
+                if len(recent_transactions) >= 5:
+                    st.markdown("### 📈 Spending Trend")
+                    amounts = [t['amount'] for t in recent_transactions]
+                    dates = [t['timestamp'] for t in recent_transactions]
+                    
+                    fig, ax = plt.subplots(figsize=(10, 4))
+                    ax.plot(dates, amounts, marker='o', linestyle='-', linewidth=2, markersize=6)
+                    ax.axhline(y=np.mean(amounts), color='g', linestyle='--', label='Average')
+                    ax.axhline(y=np.mean(amounts) + 2*np.std(amounts), color='r', linestyle='--', label='Anomaly Threshold')
+                    ax.set_xlabel('Date')
+                    ax.set_ylabel('Amount (₹)')
+                    ax.set_title('Transaction Amount Over Time')
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    plt.xticks(rotation=45)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+    
+    with tab3:
+        st.markdown("### 🛡️ Security Dashboard")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Alerts", len(st.session_state.alerts))
+            st.metric("Blocked Transactions", "3")
+        
+        with col2:
+            st.metric("Risk Score", "Low", delta="-15%")
+            st.metric("Suspicious Activities", "0")
+        
+        with col3:
+            st.metric("Account Status", "✅ Secure")
+            st.metric("Last Security Scan", "2 mins ago")
+        
+        st.markdown("---")
+        st.markdown("### 🔒 Security Recommendations")
+        
+        recommendations = [
+            ("Enable Two-Factor Authentication", "🔐", "success"),
+            ("Review Recent Transactions", "📝", "info"),
+            ("Update Security Questions", "❓", "warning"),
+            ("Monitor Credit Score", "📊", "info")
+        ]
+        
+        for rec, icon, status in recommendations:
+            col_icon, col_text = st.columns([1, 10])
+            with col_icon:
+                st.markdown(f"### {icon}")
+            with col_text:
+                if status == "success":
+                    st.success(f"✅ {rec}")
+                elif status == "warning":
+                    st.warning(f"⚠️ {rec}")
+                else:
+                    st.info(f"ℹ️ {rec}")
+
+# --- MODULE 3: Make Payment ---
+elif app_mode == "💳 Make Payment":
+    st.session_state.vizhibot.display("money", "Ready to process your payment")
+    
+    st.subheader("💳 Secure Payment Processing")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### Payment Details")
+        
+        recipient = st.text_input("Recipient Name", placeholder="John Doe")
+        amount = st.number_input("Amount (₹)", min_value=0.0, value=1000.0, step=100.0)
+        merchant = st.text_input("Merchant/Description", value="Amazon India")
+        category = st.selectbox("Category", ["Online Shopping", "Restaurant", "Groceries", "Electronics", 
+                                             "Entertainment", "Transport", "Healthcare", "Bill Payment", "Other"])
+        
+        payment_method = st.radio("Payment Method", ["UPI", "Credit Card", "Debit Card", "Net Banking"])
+        
+        current_hour = datetime.now().hour
+        hour = st.slider("Transaction Time (Hour)", 0, 23, current_hour)
+        
+        st.info(f"💡 Processing payment of ₹{amount:,.0f} at {hour}:00")
+        
+        if st.button("🔒 Process Payment", type="primary", use_container_width=True):
+            st.session_state.vizhibot.display("processing", "Analyzing payment security...")
+            
+            with st.spinner("Running security checks..."):
+                time.sleep(1.5)
+                
+                risk_score, risk_factors = predict_payment_risk(amount, category, hour, merchant)
+                
+                st.markdown("---")
+                st.markdown("### 🔍 Security Analysis")
+                
+                col_risk, col_decision = st.columns([1, 2])
+                
+                with col_risk:
+                    st.metric("Risk Score", f"{risk_score:.0%}")
+                    
+                    if risk_score < 0.3:
+                        st.success("✅ Low Risk")
+                    elif risk_score < 0.6:
+                        st.warning("⚠️ Medium Risk")
+                    else:
+                        st.error("🚨 High Risk")
+                
+                with col_decision:
+                    if risk_score < 0.3:
+                        st.success("### ✅ Payment Approved")
+                        st.balloons()
+                        st.session_state.vizhibot.display("celebrate", "Payment successful!")
+                        
+                        st.session_state.spending_profile.learn_from_transaction(amount, category, hour)
+                        
+                        st.session_state.transaction_history.append({
+                            'amount': amount,
+                            'merchant': merchant,
+                            'category': category,
+                            'hour': hour,
+                            'timestamp': datetime.now(),
+                            'status': 'Approved',
+                            'risk_score': risk_score
+                        })
+                        
+                        st.info(f"💳 ₹{amount:,.0f} sent to {recipient}")
+                        st.caption("Transaction ID: TXN" + str(random.randint(100000, 999999)))
+                        
+                    elif risk_score < 0.6:
+                        st.warning("### ⚠️ Additional Verification Required")
+                        st.session_state.vizhibot.display("warning", "Please verify your identity")
+                        st.info("📱 We've sent an OTP to your registered mobile number")
+                        
+                        otp = st.text_input("Enter OTP", max_chars=6)
+                        if st.button("Verify & Process"):
+                            st.success("✅ Payment approved after verification")
+                            st.session_state.spending_profile.learn_from_transaction(amount, category, hour)
+                    
+                    else:
+                        st.error("### 🚫 Payment Blocked")
+                        st.session_state.vizhibot.display("error", "Transaction blocked for security")
+                        st.error("This transaction has been blocked due to high fraud risk.")
+                        st.warning("📞 Contact Security: 1-800-732-8732")
+                        
+                        add_alert("Fraud Alert", f"Blocked payment of ₹{amount:,.0f} to {merchant}")
+                
+                if risk_factors:
+                    with st.expander("📊 View Detailed Risk Analysis"):
+                        for factor, score, explanation in risk_factors:
+                            col_f, col_s = st.columns([3, 1])
+                            with col_f:
+                                st.markdown(f"**{factor}**")
+                                st.caption(explanation)
+                            with col_s:
+                                risk_class = "risk-high" if score > 0.6 else "risk-medium" if score > 0.3 else "risk-low"
+                                st.markdown(f'<p class="{risk_class}">{score:.0%}</p>', unsafe_allow_html=True)
+                
+                if groq_client and risk_score >= 0.3:
+                    st.markdown("### 🤖 AI Risk Assessment")
+                    transaction_data = {
+                        'amount': amount,
+                        'hour': hour,
+                        'merchant': merchant,
+                        'category': category
+                    }
+                    
+                    with st.spinner("Generating risk assessment..."):
+                        ai_explanation = get_fraud_explanation(transaction_data, risk_score, risk_factors)
+                        if ai_explanation:
+                            st.info(ai_explanation)
+    
+    with col2:
+        st.markdown("### 💰 Quick Amounts")
+        
+        quick_amounts = [500, 1000, 2000, 5000, 10000]
+        for amt in quick_amounts:
+            if st.button(f"₹{amt:,}", use_container_width=True, key=f"quick_{amt}"):
+                st.session_state.quick_amount = amt
+                st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### 📊 Spending Summary")
+        st.metric("This Week", f"₹{st.session_state.spending_profile.weekly_spending:,.0f}")
+        st.metric("This Month", "₹45,230")
+        st.metric("Remaining Budget", "₹4,770")
+
+# --- MODULE 4: Account Dashboard ---
+elif app_mode == "📊 Account Dashboard":
+    st.session_state.vizhibot.display("analyzing", "Analyzing your financial data...")
+    
+    st.subheader("📊 Account Dashboard & Insights")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Account Balance", "₹82,450", delta="↑ ₹5,200")
+    
+    with col2:
+        st.metric("Monthly Spending", "₹45,230", delta="↓ ₹3,100")
+    
+    with col3:
+        st.metric("Total Assets", "₹3,45,320", delta="↑ ₹12,500")
+    
+    with col4:
+        st.metric("Credit Score", "780", delta="↑ 15")
+    
+    st.markdown("---")
+    
+    tab1, tab2, tab3 = st.tabs(["📈 Spending Analysis", "💡 AI Insights", "📜 Transaction History"])
+    
+    with tab1:
+        st.markdown("### 📈 Spending Pattern Analysis")
+        
+        if st.session_state.spending_profile.transaction_history:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.markdown("#### Spending by Category")
+                
+                categories = {}
+                for t in st.session_state.spending_profile.transaction_history[-30:]:
+                    cat = t.get('category', 'Other')
+                    categories[cat] = categories.get(cat, 0) + t['amount']
+                
+                if categories:
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    cats = list(categories.keys())
+                    amounts = list(categories.values())
+                    colors = plt.cm.Set3(range(len(cats)))
+                    
+                    ax.pie(amounts, labels=cats, autopct='%1.1f%%', colors=colors, startangle=90)
+                    ax.axis('equal')
+                    plt.title('Spending Distribution by Category')
+                    st.pyplot(fig)
+            
+            with col2:
+                st.markdown("#### Top Categories")
+                sorted_cats = sorted(categories.items(), key=lambda x: x[1], reverse=True)
+                for i, (cat, amt) in enumerate(sorted_cats[:5], 1):
+                    st.metric(f"{i}. {cat}", f"₹{amt:,.0f}")
+            
+            st.markdown("#### Spending by Time of Day")
+            time_data = {'Morning': 0, 'Afternoon': 0, 'Evening': 0, 'Night': 0}
+            for t in st.session_state.spending_profile.transaction_history[-30:]:
+                hour = t['hour']
+                if 5 <= hour < 12:
+                    time_data['Morning'] += t['amount']
+                elif 12 <= hour < 17:
+                    time_data['Afternoon'] += t['amount']
+                elif 17 <= hour < 22:
+                    time_data['Evening'] += t['amount']
+                else:
+                    time_data['Night'] += t['amount']
+            
+            fig, ax = plt.subplots(figsize=(10, 4))
+            times = list(time_data.keys())
+            amounts = list(time_data.values())
+            bars = ax.bar(times, amounts, color=['#FFD700', '#FF6347', '#4169E1', '#9370DB'])
+            ax.set_xlabel('Time of Day')
+            ax.set_ylabel('Amount (₹)')
+            ax.set_title('Spending Pattern by Time')
+            
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'₹{height:,.0f}',
+                       ha='center', va='bottom')
+            
+            st.pyplot(fig)
+        else:
+            st.info("No transaction data available yet. Make some payments to see insights!")
+    
+    with tab2:
+        st.markdown("### 💡 AI-Powered Financial Insights")
+        
+        if st.button("🤖 Generate Insights", type="primary"):
+            if groq_client:
+                st.session_state.vizhibot.display("thinking", "Analyzing your spending patterns...")
+                
+                with st.spinner("Generating personalized insights..."):
+                    insights = get_spending_insights(st.session_state.spending_profile)
+                    
+                    if insights:
+                        st.success("### Your Personalized Insights")
+                        st.markdown(insights)
+                        
+                        st.markdown("---")
+                        st.markdown("### 📌 Action Items")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.info("✅ Set up automatic savings")
+                            st.info("📊 Review monthly budget")
+                        with col2:
+                            st.info("🔔 Enable spending alerts")
+                            st.info("💰 Optimize subscriptions")
+                    else:
+                        st.warning("Unable to generate insights at this time.")
+            else:
+                st.warning("⚠️ AI insights require Groq API key. Please configure GROQ_API_KEY.")
+        
+        st.markdown("---")
+        st.markdown("### 🎯 Financial Goals")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.progress(0.65)
+            st.caption("Emergency Fund: 65% (₹65,000 / ₹1,00,000)")
+        with col2:
+            st.progress(0.40)
+            st.caption("Vacation Savings: 40% (₹20,000 / ₹50,000)")
+    
+    with tab3:
+        st.markdown("### 📜 Recent Transaction History")
+        
+        if st.session_state.transaction_history:
+            for i, txn in enumerate(reversed(st.session_state.transaction_history[-10:])):
+                with st.expander(f"💳 ₹{txn['amount']:,.0f} - {txn['merchant']} ({txn['status']})"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Amount:** ₹{txn['amount']:,.0f}")
+                        st.write(f"**Merchant:** {txn['merchant']}")
+                        st.write(f"**Category:** {txn['category']}")
+                    with col2:
+                        st.write(f"**Time:** {txn['hour']}:00")
+                        st.write(f"**Date:** {txn['timestamp'].strftime('%Y-%m-%d %H:%M')}")
+                        st.write(f"**Status:** {txn['status']}")
+                        st.metric("Risk Score", f"{txn['risk_score']:.0%}")
+        else:
+            st.info("No payment transactions yet. Use the 'Make Payment' module to process payments.")
+        
+        st.markdown("---")
+        
+        if st.session_state.spending_profile.transaction_history:
+            st.markdown("### 📊 All Transactions (Last 30 Days)")
+            
+            recent = st.session_state.spending_profile.transaction_history[-30:]
+            df = pd.DataFrame(recent)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.sort_values('timestamp', ascending=False)
+            
+            st.dataframe(
+                df[['timestamp', 'amount', 'category', 'hour']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            csv = df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Transaction History",
+                data=csv,
+                file_name=f"transactions_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+
+# --- Footer ---
+st.markdown("---")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("### 🏦 SecureBank")
+    st.caption("Your trusted banking partner")
+
+with col2:
+    st.markdown("### 📞 Support")
+    st.caption("1-800-732-8732")
+    st.caption("support@securebank.com")
+
+with col3:
+    st.markdown("### 🔒 Security")
+    st.caption("256-bit SSL Encryption")
+    st.caption("PCI DSS Compliant")
